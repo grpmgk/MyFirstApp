@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Пользователи</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; }
+        input, button { margin: 0.5rem; padding: 0.5rem; }
+        ul { list-style: none; padding: 0; }
+        li { background: #f0f0f0; margin: 0.5rem 0; padding: 0.5rem; }
+    </style>
+</head>
+<body>
+    <h1>Управление пользователями</h1>
+    
+    <div>
+        <input type="text" id="nameInput" placeholder="Имя пользователя">
+        <button id="addBtn">Добавить</button>
+    </div>
+    
+    <div>
+        <button id="showBtn">Показать всех</button>
+    </div>
+    
+    <ul id="userList"></ul>
+
+    <script>
+        const apiUrl = '/users';
+        
+        document.getElementById('addBtn').onclick = async () => {
+            const name = document.getElementById('nameInput').value.trim();
+            if (!name) return alert('Введите имя');
+            
+            const resp = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name})
+            });
+            if (resp.ok) {
+                document.getElementById('nameInput').value = '';
+                loadUsers();
+            } else {
+                alert('Ошибка при добавлении');
+            }
+        };
+        
+        document.getElementById('showBtn').onclick = loadUsers;
+        
+        async function loadUsers() {
+            const resp = await fetch(apiUrl);
+            const users = await resp.json();
+            const list = document.getElementById('userList');
+            list.innerHTML = users.map(u => '<li>' + u.id + '. ' + u.name + '</li>').join('');
+        }
+        
+        loadUsers();
+    </script>
+</body>
+</html>

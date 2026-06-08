@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypass
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"   # пробрасываем порт наружу, чтобы ты мог подключиться к БД извне (например, через DBeaver)
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # сохраняем данные БД между перезапусками
+
+  app:
+    build: .          # собираем образ из текущей папки (Dockerfile)
+    ports:
+      - "8080:8080"   # мапим порт 8080 контейнера на 8080 хоста
+    environment:
+      DB_HOST: db           # имя сервиса db в этой сети
+      DB_PORT: 5432
+      DB_USER: myuser
+      DB_PASSWORD: mypass
+      DB_NAME: mydb
+    depends_on:
+      - db                  # сначала запускаем БД, потом приложение
+    # restart: always       # если нужно автоматически перезапускать
+
+volumes:
+  pgdata:
