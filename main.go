@@ -240,11 +240,16 @@ func main() {
 	})
 
 	http.HandleFunc("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		// Удаляем куку с теми же параметрами, что и при установке
 		http.SetCookie(w, &http.Cookie{
-			Name:   "user_id",
-			Value:  "",
-			MaxAge: -1,
+			Name:     "user_id",
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			MaxAge:   -1,
 		})
+		// Дополнительно: запрещаем кешировать страницу, чтобы браузер точно обновил состояние
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.Redirect(w, r, "/", http.StatusFound)
 	})
 
