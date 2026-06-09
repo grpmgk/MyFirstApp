@@ -50,7 +50,10 @@ func main() {
 	// Создаём таблицу, если её нет (упрощённо)
 	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id SERIAL PRIMARY KEY,
-		name TEXT NOT NULL
+		yandex_id TEXT UNIQUE,
+		email TEXT,
+		name TEXT,
+		created_at TIMESTAMP DEFAULT NOW()
 	)`)
 
 	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +185,7 @@ func main() {
 			return
 		}
 
-		// Сохраняем пользователя в БД (функцию напишем отдельно)
+		// Сохраняем пользователя в БД
 		userID, err := saveOrGetUserByYandex(yandexUser.ID, yandexUser.Email, yandexUser.FirstName+" "+yandexUser.LastName)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
@@ -194,7 +197,8 @@ func main() {
 			Name:     "user_id",
 			Value:    fmt.Sprintf("%d", userID),
 			HttpOnly: true,
-			MaxAge:   86400, // 24 часа
+			Path:     "/",
+			MaxAge:   86400,
 		})
 
 		// Удаляем куку с state
@@ -204,9 +208,34 @@ func main() {
 			MaxAge: -1,
 		})
 
-		// Редиректим на главную
 		http.Redirect(w, r, "/", http.StatusFound)
 	})
+
+	http.HandleFunc("/api/me", func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("user_id")
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var user User
+		err = db.QueryRow("SELECT id, name, email FROM users WHERE id = $1", cookie.Value).Scan(&user.ID, &user.Name, &user.Email)
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(user)
+	})
+
+	http.HandleFunc("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:   "user_id",
+			Value:  "",
+			MaxAge: -1,
+		})
+		http.Redirect(w, r, "/", http.StatusFound)
+	})
+
 	log.Println("Сервер запущен на :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -222,6 +251,7 @@ func generateRandomState() string {
 
 func saveOrGetUserByYandex(yandexID, email, name string) (int, error) {
 	// Сначала проверяем, есть ли пользователь с таким yandex_id
+	log.Println("saveOrGetUserByYandex called with", yandexID, email, name)
 	var userID int
 	err := db.QueryRow("SELECT id FROM users WHERE yandex_id = $1", yandexID).Scan(&userID)
 	if err == nil {
@@ -244,6 +274,6 @@ func saveOrGetUserByYandex(yandexID, email, name string) (int, error) {
 		"INSERT INTO users (yandex_id, email, name) VALUES ($1, $2, $3) RETURNING id",
 		yandexID, email, name,
 	).Scan(&userID)
-
+	log.Println("saveOrGetUserByYandex returning", userID, err)
 	return userID, err
 }

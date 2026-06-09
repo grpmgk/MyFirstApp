@@ -11,11 +11,7 @@
 </head>
 <body>
     <h1>Управление пользователями</h1>
-    <div>
-        <a href="/auth/yandex/login">
-            <button>Войти через Яндекс</button>
-        </a>
-    </div>
+    <div id="authBlock"></div>
     <div>
         <input type="text" id="nameInput" placeholder="Имя пользователя">
         <button id="addBtn">Добавить</button>
@@ -57,6 +53,27 @@
         }
         
         loadUsers();
+
+        async function updateAuthUI() {
+            const resp = await fetch('/api/me');
+            const authDiv = document.getElementById('authBlock');
+            if (resp.ok) {
+                const user = await resp.json();
+                authDiv.innerHTML = `
+                    <p>Вы вошли как: ${user.name} (${user.email})</p>
+                    <button id="logoutBtn">Выйти</button>
+                `;
+                document.getElementById('logoutBtn')?.addEventListener('click', () => {
+                    window.location.href = '/auth/logout';
+                });
+            } else {
+                authDiv.innerHTML = '<a href="/auth/yandex/login"><button>Войти через Яндекс</button></a>';
+            }
+        }
+
+        updateAuthUI();
     </script>
 </body>
 </html>
+
+
