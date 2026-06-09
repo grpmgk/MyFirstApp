@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -135,55 +137,65 @@ func main() {
 		}
 
 		// Обмениваем code на токен
-		tokenURL := fmt.Sprintf(
-			"https://oauth.yandex.ru/token?grant_type=authorization_code&code=%s&client_id=%s&client_secret=%s",
-			code,
-			yandexClientID,
-			yandexClientSecret,
-		)
+		// Формируем тело запроса (application/x-www-form-urlencoded)
+		data := url.Values{}
+		data.Set("grant_type", "authorization_code")
+		data.Set("code", code)
+		data.Set("client_id", yandexClientID)
+		data.Set("client_secret", yandexClientSecret)
 
-		// Отправляем POST-запрос к Яндекс
-		resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", nil)
+		// Отправляем POST с телом
+		resp, err := http.PostForm("https://oauth.yandex.ru/token", data)
 		if err != nil {
 			http.Error(w, "Token exchange failed", http.StatusInternalServerError)
 			return
 		}
 		defer resp.Body.Close()
 
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Ответ Яндекса на /token: статус %s, тело: %s", resp.Status, string(bodyBytes))
+		// нужно снова восстановить тело для декодирования
+		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		// Парсим ответ
 		var tokenResp struct {
 			AccessToken string `json:"access_token"`
-			TokenType   string `json:"token_type"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+			log.Printf("Ошибка парсинга tokenResp: %v", err)
 			http.Error(w, "Failed to parse token", http.StatusInternalServerError)
 			return
 		}
+		log.Printf("Access token получен: %s", tokenResp.AccessToken) // <- добавить
 
 		// Получаем информацию о пользователе
-		userInfoURL := fmt.Sprintf(
-			"https://login.yandex.ru/info?format=json&oauth_token=%s",
-			tokenResp.AccessToken,
-		)
+		userInfoURL := fmt.Sprintf("https://login.yandex.ru/info?format=json&oauth_token=%s", tokenResp.AccessToken)
+		log.Printf("Запрос к /info: %s", userInfoURL) // <- добавить
 
 		userResp, err := http.Get(userInfoURL)
 		if err != nil {
+			log.Printf("Ошибка GET /info: %v", err)
 			http.Error(w, "Failed to get user info", http.StatusInternalServerError)
 			return
 		}
 		defer userResp.Body.Close()
 
-		// Парсим информацию о пользователе
+		body, _ := io.ReadAll(userResp.Body)        // <- добавить
+		log.Printf("Ответ /info: %s", string(body)) // <- добавить
+
+		// Парсим информацию
 		var yandexUser struct {
 			ID        string `json:"id"`
 			Email     string `json:"default_email"`
 			FirstName string `json:"first_name"`
 			LastName  string `json:"last_name"`
 		}
-		if err := json.NewDecoder(userResp.Body).Decode(&yandexUser); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&yandexUser); err != nil {
+			log.Printf("Ошибка парсинга JSON: %v", err)
 			http.Error(w, "Failed to parse user info", http.StatusInternalServerError)
 			return
 		}
+
+		log.Printf("Данные от Яндекса: ID=%s, Email=%s, Имя=%s %s", yandexUser.ID, yandexUser.Email, yandexUser.FirstName, yandexUser.LastName)
 
 		// Сохраняем пользователя в БД
 		userID, err := saveOrGetUserByYandex(yandexUser.ID, yandexUser.Email, yandexUser.FirstName+" "+yandexUser.LastName)
@@ -250,30 +262,25 @@ func generateRandomState() string {
 }
 
 func saveOrGetUserByYandex(yandexID, email, name string) (int, error) {
-	// Сначала проверяем, есть ли пользователь с таким yandex_id
-	log.Println("saveOrGetUserByYandex called with", yandexID, email, name)
+	log.Printf("===> saveOrGetUserByYandex: yandexID='%s', email='%s', name='%s'", yandexID, email, name)
 	var userID int
 	err := db.QueryRow("SELECT id FROM users WHERE yandex_id = $1", yandexID).Scan(&userID)
 	if err == nil {
-		return userID, nil // пользователь найден
-	}
-
-	// Если пользователя нет, проверяем по email (на случай, если уже регистрировался другим способом)
-	err = db.QueryRow("SELECT id FROM users WHERE email = $1", email).Scan(&userID)
-	if err == nil {
-		// Пользователь есть по email, обновляем yandex_id
-		_, err = db.Exec("UPDATE users SET yandex_id = $1 WHERE id = $2", yandexID, userID)
-		if err != nil {
-			return 0, err
-		}
+		log.Printf("Найден по yandex_id: %d", userID)
 		return userID, nil
 	}
-
-	// Создаём нового пользователя
-	err = db.QueryRow(
-		"INSERT INTO users (yandex_id, email, name) VALUES ($1, $2, $3) RETURNING id",
-		yandexID, email, name,
-	).Scan(&userID)
-	log.Println("saveOrGetUserByYandex returning", userID, err)
-	return userID, err
+	err = db.QueryRow("SELECT id FROM users WHERE email = $1", email).Scan(&userID)
+	if err == nil {
+		log.Printf("Найден по email: %d, обновляем yandex_id", userID)
+		_, err = db.Exec("UPDATE users SET yandex_id = $1 WHERE id = $2", yandexID, userID)
+		return userID, err
+	}
+	log.Printf("Создаём нового пользователя")
+	err = db.QueryRow("INSERT INTO users (yandex_id, email, name) VALUES ($1, $2, $3) RETURNING id", yandexID, email, name).Scan(&userID)
+	if err != nil {
+		log.Printf("Ошибка вставки: %v", err)
+		return 0, err
+	}
+	log.Printf("Создан ID: %d", userID)
+	return userID, nil
 }
